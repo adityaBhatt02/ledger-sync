@@ -129,6 +129,15 @@ public final class SqlLedgerStore implements LedgerStore, AutoCloseable {
         }
     }
 
+    @Override
+    public void clear() {
+        try (Statement st = conn.createStatement()) {
+            st.execute("DELETE FROM ledger");
+        } catch (SQLException e) {
+            throw new IllegalStateException("could not clear the ledger", e);
+        }
+    }
+
     public BigDecimal sumAmounts() {
         try (Statement st = conn.createStatement();
              ResultSet rs = st.executeQuery("SELECT SUM(amount) FROM ledger")) {

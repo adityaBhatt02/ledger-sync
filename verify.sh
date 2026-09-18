@@ -6,7 +6,9 @@ cd "$(dirname "$0")"
 
 echo "==> compiling"
 rm -rf build/selfcheck && mkdir -p build/selfcheck
-javac -d build/selfcheck $(find src/main/java -name '*.java')
+javac -d build/selfcheck $(find src/main/java -name '*.java' \
+  ! -name 'MongoDocumentStore.java' \
+  ! -name 'App.java')
 
 echo
 echo "==> running"

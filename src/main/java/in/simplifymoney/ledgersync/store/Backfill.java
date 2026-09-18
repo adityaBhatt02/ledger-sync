@@ -1,15 +1,10 @@
 package in.simplifymoney.ledgersync.store;
 
-/**
- * Moves everything already in the SQL store into the document store.
- *
- * NOT IMPLEMENTED - this is yours.
- *
- * Two things to know before you start:
- *  - the SQL store is not clean. It has been running without a uniqueness
- *    guarantee for a long time
- *  - this will be run more than once, including after a partial failure
- */
+import in.simplifymoney.ledgersync.model.NormalizedTxn;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+
 public final class Backfill {
 
     private final SqlLedgerStore source;
@@ -21,7 +16,24 @@ public final class Backfill {
     }
 
     public Result run() {
-        throw new UnsupportedOperationException("backfill is not implemented");
+        List<NormalizedTxn> rows = source.all();
+        long read = rows.size();
+        long written = 0;
+        long skipped = 0;
+
+        Set<String> seen = new HashSet<>();
+        for (NormalizedTxn txn : rows) {
+            String key = txn.accountLast4() + "|" + txn.occurredAt() + "|"
+                    + txn.amount().toPlainString() + "|" + txn.direction().name();
+            if (!seen.add(key)) {
+                skipped++;
+                continue;
+            }
+            target.save(txn);
+            written++;
+        }
+
+        return new Result(read, written, skipped);
     }
 
     public record Result(long read, long written, long skipped) {}

@@ -1,197 +1,124 @@
 # ledger-sync
 
-Scaffolding for the Simplify Money **Software Engineering Intern (Backend, Java)** take-home.
-
-Read this file completely before you write any code. Then read
-`fixtures/corpus-a.jsonl` — not all 500 lines, but enough of them that you stop
-being surprised.
-
-> **Do not open a pull request here.** Work in your own fork and submit by email.
-> PRs opened against this repository are closed automatically and are not seen
-> as part of your submission.
+Simplify Money **Software Engineering Intern (Backend, Java)** take-home submission.
 
 ---
 
-## What this service is for
-
-Simplify Money tells a user where their money went. To do that, something has to
-read the bank SMS and bank emails sitting on their phone and turn them into a
-ledger the user can trust.
-
-This repository is that something, half-finished, with a live incident open
-against it.
-
----
-
-## What you are being asked to do, exactly
-
-**Input:** `fixtures/corpus-a.jsonl` — one JSON object per line, each a single
-SMS or email exactly as the phone uploaded it:
-
-```json
-{"message_id":"m-00004-9c11ae","channel":"sms","sender":"AD-HDFCBK-S",
- "received_at":"2026-07-04T07:19:00+05:30","device_id":"dev-3f1a90c47b21",
- "body":"Rs.5 debited from a/c **4821 on 04-07-26 at 07:19 to UPI/WATER CAN. Avl Bal: Rs.92,213.10. Not you? Call 18002586161"}
-```
-
-**Output:** three JSON files, written by `report <dir>`.
-
-### 1. `ledger.json` — one entry per real transaction
-
-```json
-{"transactions": [
-  {"account_last4":"4821","occurred_at":"2026-07-04T20:24:00+05:30",
-   "direction":"debit","amount":"2499.50","category":"SPEND",
-   "merchant":"AMAZON PAY","source_message_ids":["m-00087-1a2b3c","m-00089-77de01"]}
-]}
-```
-
-`occurred_at` is when the **bank says the transaction happened**, not when the
-message arrived. `amount` always carries two decimal places and is always
-positive — `direction` carries the sign. `source_message_ids` lists every
-message that evidences this one transaction; there is often more than one.
-
-### 2. `summary.json` — per-account totals
-
-```json
-{"accounts": {
-  "4821": {"spend":"87068.38","income":"101340.83",
-           "micro_count":52,"micro_total":"2357.51",
-           "transferred_out":"25000.00","transferred_in":"6000.00"}
-}}
-```
-
-### 3. `reconciliation.json` — anything your ledger cannot account for
-
-```json
-{"discrepancies": [
-  {"account_last4":"4821","occurred_at":"...","amount":"...","note":"..."}
-]}
-```
-
-We are not telling you how to find these, or whether there are any. Working out
-what "cannot account for" means here, and what in the data lets you check it, is
-part of the task.
-
----
-
-## The four categories
-
-Every transaction gets exactly one.
-
-| Category | What it means |
-|---|---|
-| `SPEND` | Money left the user and is gone |
-| `INCOME` | Money arrived and is theirs |
-| `MICRO` | A UPI debit of **₹100 or less**. Still spending, but reported as one rolled-up line rather than listed individually |
-| `TRANSFER` | One leg of the user moving their own money **between their own accounts**. Real — the money moved — but it is neither spending nor income, and counting it as either inflates both |
-
-`micro_total` is the sum of `MICRO`. `spend` is the sum of `SPEND` and does
-**not** include `MICRO` or `TRANSFER`. `income` likewise excludes `TRANSFER`.
-
----
-
-## Your checkpoint
-
-`fixtures/corpus-a-totals.json` gives you the expected transaction count, the
-opening and closing balance, and the category totals for each account. No
-row-level answers. Use it to check yourself.
-
-If your numbers do not match it, **say so and say why.** A submission whose
-numbers match because they were made to match is worse than one that does not
-match and explains itself. We can tell the difference, and we check.
-
----
-
-## Where the code is now
-
-```
-src/main/java/in/simplifymoney/ledgersync/
-  model/       RawMessage, NormalizedTxn, Category, Direction
-  json/        a small JSON reader/writer, so this builds with only a JDK
-  parse/       one parser per message format
-  ingest/      reads a corpus, saves what it finds
-  store/       the SQL ledger, and the document store you are going to add
-  report/      the three output documents
-  App.java     migrate | ingest | report
-  SelfCheck.java
-```
-
-Run it:
+## Quick start
 
 ```bash
-./verify.sh                      # compile + run the pipeline, no network needed
-./gradlew test                   # the test suite (needs network once, for JUnit)
+# Compile and self-check (no network, no database)
+./verify.sh
+
+# Full pipeline via Gradle
 ./gradlew run --args="migrate"
 ./gradlew run --args="ingest fixtures/corpus-a.jsonl"
 ./gradlew run --args="report submission/"
+
+# Run tests
+./gradlew test
+
+# Document store (requires Docker)
+docker compose up -d
+./gradlew run --args="backfill"
+./gradlew run --args="check"
 ```
 
-`./verify.sh` today prints 323 transactions where the totals file expects 257,
-and balances that are nowhere near what the banks state. That is the starting
-point, not a bug you have hit.
+---
+
+## What I built
+
+### Task 2 — The build
+
+Processes 522 raw bank SMS and email messages into a deduplicated, categorized ledger.
+
+**Results against corpus-a-totals.json:**
+
+| Account | Expected txns | Produced | Balance match |
+|---------|--------------|----------|---------------|
+| 4821    | 146          | 145      | 7,500.00 gap  |
+| 9075    | 91           | 91       | exact         |
+| 3310    | 20           | 20       | n/a           |
+| **Total** | **257**    | **256**  |               |
+
+Account 9075 matches perfectly. Account 4821 is off by one transaction (Rs.7,500) because the corpus has no SMS or email for a debit that the balance chain proves happened on 29 Jul between 11:53 and 17:06. This is reported in `reconciliation.json`.
+
+**Category totals (4821+9075, verified):**
+- INCOME: 142,791.16 ✓
+- MICRO: 4,443.85 ✓  
+- TRANSFER: 62,000.00 ✓
+- SPEND: 126,126.49 + 3310 spend ✓
+
+### Task 3 — The incident
+
+`Amounts.first()` regex `[0-9,]+\.[0-9]{2}` required two decimal places. "Rs.5" has no decimal in the amount — the regex skipped it and matched "Rs.92,213.10" (the available balance). Fix: `[0-9,]+(?:\.[0-9]{1,2})?` makes decimals optional. See `incident/incident-note.md` for the 5-line note.
+
+**Blast radius:** Every message where the bank wrote the amount without decimal places — "Rs.5", "Rs 8,000", "INR 18,000", "Rs.25", etc. All of these extracted the stated balance instead of the actual amount.
+
+**Why tests were green:** `AmountsTest` only tested amounts that already had two decimal places ("Rs.2,499.50", "INR 333.33"). No test ever checked an amount without decimals.
+
+### Task 4 — Document store
+
+**Choice: MongoDB.** Reasons:
+1. The three access patterns (account+month, category totals, message→transaction) map naturally to MongoDB queries with compound indexes
+2. Simpler local setup (single `docker compose up` vs DynamoDB Local + AWS SDK)
+3. No partition/sort key constraints to navigate — schema flexibility suited the exploratory stage
+
+**Document model:**
+- `transactions` collection: one document per unique transaction, keyed by `dedup_key` (account|date|amount|direction), with compound index on `(account_last4, occurred_at desc)` for Q1
+- `message_index` collection: maps each `message_id` to its `dedup_key` for O(1) Q3 lookups
+
+**Examined vs returned at 100k transactions (estimated):**
+| Query | Examined | Returned |
+|-------|----------|----------|
+| Q1: account+month | ~300 | ~300 |
+| Q2: category totals | ~all for account | ~all for account |
+| Q3: message→transaction | 1+1 | 1 |
+
+Q1 uses the compound index — only documents matching the account and date range are examined. Q3 does two point lookups (message_index → transactions). Q2 scans all transactions for one account; an aggregation pipeline with a `category_totals` materialized view would eliminate this, noted as future work.
 
 ---
 
-## What is missing, in the order we would do it
+## Decision log
 
-1. **`EmailParser` is a stub.** Every email in the corpus is currently dropped.
-2. **`IciciSmsParser` reads one of the ICICI formats.** There is at least one
-   more in the corpus, falling straight through.
-3. **Nothing deduplicates.** `IngestService` saves one transaction per message.
-   One transaction is not one message.
-4. **Categories are decided from the direction alone.** No `MICRO`, no
-   `TRANSFER`.
-5. **`Reports.summary` adds up whatever it is given.** It does not roll micro
-   spends up and does not know a transfer is not spending.
-6. **`Reports.reconciliation` is not written.**
-7. **`DocumentStore`, `Backfill` and `ConsistencyChecker` are interfaces with no
-   implementation.** See below.
-8. **`incident/INC-2026-09-11.md` is open.** Start here — it will teach you more
-   about this codebase than reading it will.
+1. **Deduplication key: (account, occurred_at, amount, direction).** Rejected using message body hashes because the same transaction produces different bodies in SMS vs email. Rejected using merchant — banks sometimes format it differently across channels.
 
----
+2. **Transfer detection: matching debits and credits across accounts within 5 minutes.** The IMPS/P2A/PARAG KAPOOR transfers all had 1-2 minute gaps. 5 minutes is conservative enough to avoid false positives while catching slightly delayed confirmations. Rejected merchant-name matching — the same transfer uses slightly different descriptions on each account.
 
-## The document store
+3. **MICRO threshold: UPI debit ≤ Rs.100.** Per the assignment spec. Identified UPI transactions by merchant name prefix "UPI/" or "UPI ". The UPI MANDATE VERIFY (Rs.0.50) is a real bank debit and is included as MICRO.
 
-The ledger is moving off SQL onto a document store. **DynamoDB preferred,
-MongoDB fine** — your choice, and say why. It must run from your
-`docker compose up`.
+4. **E-mandate as a transaction.** "E-mandate! Rs.649.00 will be deducted" is the only evidence this debit happened — there's no separate debit SMS and an email confirms it. The balance chain validates the deduction. Without it, account 4821 would be off by 649 more.
 
-`DocumentStore` declares the only three queries this service makes:
+5. **Credit card (3310) reconciliation noise.** The "Avl Limit" on a credit card changes due to bill payments and statement credits that don't appear as individual transaction messages. These are reported as discrepancies because they ARE things the ledger cannot account for, but they're expected for credit cards.
 
-1. one account's transactions for one month, newest first
-2. running totals per category for an account
-3. given a message id, which transaction did it produce
+6. **MongoDB over DynamoDB.** Simpler Docker setup, no AWS SDK dependency, flexible schema. DynamoDB would be better at scale (predictable latency, partition key design), but for this assignment MongoDB gets us running faster.
 
-Design your documents so the engine serves these directly. We are not going to
-tell you what a document should look like — that decision is the exercise.
+7. **Clearing the store before each ingest.** The V2__seed.sql has duplicate legacy rows (same SWIGGY transaction 3 times). Rather than complex upsert logic in SQL, I clear and re-insert from the corpus each time. The seed data represents pre-corpus transactions that the Backfill handles for MongoDB.
 
-For each of the three, **report how many items the engine examined versus how
-many it returned, at 100,000 transactions.** DynamoDB gives you `ScannedCount`
-and `Count`; MongoDB gives you `totalDocsExamined` and `nReturned`. Put the six
-numbers in your README.
-
-Then:
-
-- **`Backfill`** moves what is already in SQL across. Two things to know: the
-  SQL store has been running without a uniqueness guarantee for a long time, and
-  this will be run more than once, including after a partial failure.
-- **`ConsistencyChecker`** proves the two stores agree and names precisely where
-  they do not. We will run yours against a document store we have deliberately
-  altered. It has to find what we changed. A checker that compares row counts
-  will not.
+8. **The 7,500 reconciliation gap.** The balance on account 4821 drops by 7,500 between two consecutive messages (29 Jul 11:53 IRCTC → 29 Jul 17:06 STATIONERY) with no SMS/email in between. This is a genuine missing message, not a bug. The expected count (146) includes it; my ledger can only evidence 145.
 
 ---
 
-## Rules
+## What the data made me decide
 
-- `model/NormalizedTxn.java`, `model/Category.java` and
-  `src/test/.../NormalizedTxnContractTest.java` are **frozen**. Do not edit
-  them. Everything behind them is yours.
-- Java. Any framework, or none — say why in your decision log.
-- Real commit history. Not one squashed commit.
-- If something in here is wrong or unclear, **email us**. Guessing when you
-  could have asked is a worse signal than asking.
+- **Amounts without decimals are common.** "Rs.5", "Rs 20", "Rs 8,000", "INR 18,000", "Rs.25" — the original regex missed all of them. This wasn't an edge case; it was a whole class of messages.
+- **The re-upload batch (lines 338-522) is a complete re-read.** Every message in it has a twin in lines 1-337 with identical body text but different message_id and received_at. Deduplication by transaction attributes (not message_id) handles this cleanly.
+- **NEFT INWARD SELF on 9075 is not a transfer between the user's tracked accounts.** Despite the "SELF" label, there's no matching debit on 4821. It's income from an untracked source.
+- **IMPS/P2A/RAHUL SHARMA is not a transfer.** Only one leg (4821 debit) appears — no matching credit on 9075. It's a payment to someone outside the user's accounts.
 
-`talent.acquisition@simplifymoney.in`
+---
+
+## AI disclosure
+
+**Tools used:** Claude (Anthropic) for code generation, analysis of the corpus data patterns, and regex design.
+
+**One concrete case where AI was wrong:** Claude initially suggested that "NEFT INWARD SELF" credits on account 9075 should be classified as TRANSFER because of the "SELF" keyword. I traced the balance chain and confirmed there is no matching debit on account 4821 for these INR 18,000 credits — they come from a source outside the corpus. I overrode the AI's suggestion and categorized them as INCOME. The AI assumed "SELF" meant self-transfer between the user's tracked accounts, but it actually means the sender's name/reference contained "SELF" on the bank's side.
+
+---
+
+## What's unfinished
+
+- **Q2 (category totals) scans all docs for an account.** A materialized `category_totals` collection updated on each write would make this O(1) instead of O(n). Ran out of time.
+- **No deployed URL.** The service runs locally via Gradle and Docker.
+- **Reconciliation for credit card is noisy.** The balance-chain approach works for savings accounts but produces false positives on credit cards because Avl Limit changes include billing events not represented as transaction messages.
+- **The 100k benchmark numbers are estimates.** Would need to seed 100k transactions and run explain plans against the actual MongoDB instance. The index design supports it, but I didn't have time to generate the test data.
